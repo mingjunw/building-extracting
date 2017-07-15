@@ -2,22 +2,36 @@
 Author: Mingjun Wang
 Description: ConvNet for building extraction
 """
-import BldgExtr
+from BldgExtr import *
+import math
+import numpy
+import theano
+import theano.tensor as T
+from theano.tensor.signal import pool
+from theano.tensor.nnet import conv
+from theano.tensor.signal import conv as sgnconv
 
-def Train_leNet(args, nkerns=[50, 70, 100, 150, 100, 70, 70], batch_size=1):
-
-    imgobj = Image.open(args.imageName)
+def Train_leNet(nkerns=[50, 70, 100, 150, 100, 70, 70], n_epochs=20, batch_size=5,learning_rate=0.1):
+    imgN = 40
+    rng = numpy.random.RandomState(23455)
+    #imgobj = Image.open(args.imageName)
     
-    cols, rows = imgobj.size
-    Width = numpy.int(math.floor(cols / 16.) * 16)
-    Height = numpy.int(math.floor(rows / 16.) * 16)
-    x1 = numpy.zeros((imgN,Width*Height*3),dtype='float32')
-    img = numpy.asarray(imgobj, dtype='float32')
-    imgtmp = img[0:Height,0:Width,0:3]/255.
-    x1[0,:] = imgtmp.reshape(Height*Width*3)
-
-    test_set_x = theano.tensor._shared(
-        numpy.asarray(x1,dtype=theano.config.floatX),borrow=True)
+    theano.config.compute_test_value = 'warn' 
+    
+    train_set_x = numpy.random.randn(imgN,3,500,500).reshape(imgN,3*500*500)
+    train_set_x = theano.tensor._shared(
+        numpy.asarray(train_set_x,dtype=theano.config.floatX),borrow=True)
+    train_set_y = numpy.random.randn(imgN,1,500,500).reshape(imgN,1*500*500)
+    train_set_y = theano.tensor._shared(
+        numpy.asarray(train_set_y,dtype=theano.config.floatX),borrow=True)
+    # compute number of minibatches for training, validation and testing
+    n_train_batches = train_set_x.get_value(borrow=True).shape[0]
+    n_train_batches //= batch_size
+    #cols, rows = imgobj.size
+    cols, rows = 500,500
+    Width = 500 #numpy.int(math.floor(cols / 16.) * 16)
+    Height = 500 #numpy.int(math.floor(rows / 16.) * 16)
+    
 
     imgshp0 = (Height, Width)
     imgshp1 = (imgshp0[0]/2, imgshp0[1]/2)
@@ -29,16 +43,18 @@ def Train_leNet(args, nkerns=[50, 70, 100, 150, 100, 70, 70], batch_size=1):
 
     index = T.lscalar()
     x = T.matrix('x')
-
+    y = T.matrix('y')
+    #y = T.ivector('y')  # the labels are presented as 1D vector of
+                        # [int] labels
     print '... building the model'
 
-    layer0_input = x.reshape((batch_size, Height, Width, 3)).dimshuffle(0, 3, 1, 2)
+    layer0_input = x.reshape((batch_size, 3, Height, Width)) #.dimshuffle(0, 3, 1, 2)
 
     layer0 = LeNetConvPoolLayer(
         rng,
         input=layer0_input,
         image_shape=(batch_size, 3, imgshp0[0], imgshp0[1]),
-        filter_shape=(nkerns[0], 3, 5, 5),
+        filter_shape=(nkerns[0], 3, 5, 5),    #nkerns=[50, 70, 100, 150, 100, 70, 70]
         poolsize=(2, 2)
     )
 
@@ -46,7 +62,7 @@ def Train_leNet(args, nkerns=[50, 70, 100, 150, 100, 70, 70], batch_size=1):
         rng,
         input=layer0.output,
         image_shape=(batch_size, nkerns[0], imgshp1[0], imgshp1[1]),
-        filter_shape=(nkerns[1], nkerns[0], 5, 5),
+        filter_shape=(nkerns[1], nkerns[0], 5, 5),   #nkerns=[50, 70, 100, 150, 100, 70, 70]
         poolsize=(2, 2)
     )
 
@@ -54,7 +70,7 @@ def Train_leNet(args, nkerns=[50, 70, 100, 150, 100, 70, 70], batch_size=1):
         rng,
         input=layer1.output,
         image_shape=(batch_size, nkerns[1], imgshp2[0], imgshp2[1]),
-        filter_shape=(nkerns[2], nkerns[1], 3, 3),
+        filter_shape=(nkerns[2], nkerns[1], 3, 3),  #nkerns=[50, 70, 100, 150, 100, 70, 70]
         poolsize=(2, 2)
     )
 
@@ -62,7 +78,7 @@ def Train_leNet(args, nkerns=[50, 70, 100, 150, 100, 70, 70], batch_size=1):
         rng,
         input=layer2.output,
         image_shape=(batch_size, nkerns[2], imgshp3[0], imgshp3[1]),
-        filter_shape=(nkerns[3], nkerns[2], 3, 3),
+        filter_shape=(nkerns[3], nkerns[2], 3, 3),  #nkerns=[50, 70, 100, 150, 100, 70, 70]
         poolsize=(2, 2)
     )
 
@@ -106,7 +122,7 @@ def Train_leNet(args, nkerns=[50, 70, 100, 150, 100, 70, 70], batch_size=1):
         input=output_all,
         image_shape=(batch_size, nkerns[0]+nkerns[1]+nkerns[2]+nkerns[3]+nkerns[6], imgshp1[0], imgshp1[1]),
         filter_shape=(128, nkerns[0]+nkerns[1]+nkerns[2]+nkerns[3]+nkerns[6], 1, 1),
-        poolsize=(1, 1)
+        poolsize=(1, 1)   #nkerns=[50, 70, 100, 150, 100, 70, 70]
     )
 
     softmax_input1 = layer_fn.output.dimshuffle(0, 2, 3, 1)
@@ -116,39 +132,70 @@ def Train_leNet(args, nkerns=[50, 70, 100, 150, 100, 70, 70], batch_size=1):
 
     net_output_2x = UpSampling2x(net_output.reshape((batch_size,1,imgshp1[0],imgshp1[1])),
                                  (batch_size,1,imgshp0[0],imgshp0[1]))
-
-    test_model = theano.function(
+        
+    # the setting of train model
+    
+    #cost = negative_log_likelihood(net_output_2x,y)
+    params = layer_fn.params + layer6.params + layer5.params + layer4.params + layer3.params + layer2.params + layer1.params + layer0.params
+    
+    p_1 = 1 / (1 + T.exp(-T.dot(net_output_2x, params[0]) - params[1]))   # Probability that target = 1
+    prediction = p_1 > 0.5                    # The prediction thresholded
+    xent = -y * T.log(p_1) - (1-y) * T.log(1-p_1) # Cross-entropy loss function
+    cost = xent.mean() + 0.01 * (params[0] ** 2).sum()# T
+    
+    grads = T.grad(cost, params)
+    updates = [
+        (param_i, param_i - learning_rate * grad_i)
+        for param_i, grad_i in zip(params, grads)
+    ]
+    # Train model
+    train_model = theano.function(
         [index],
-        [net_output_2x],
+        cost,
+        updates = updates,
         givens={
-            x: test_set_x[index * batch_size: (index + 1) * batch_size]
-        }
+            x: train_set_x[index * batch_size: (index + 1) * batch_size],
+            y: train_set_y[index * batch_size: (index + 1) * batch_size]}
     )
+    
+    
+    
+    ###############
+    # TRAIN MODEL #
+    ###############
+    print('... training model')
+    # early-stopping parameters
+    patience = 10000  # look as this many examples regardless
+    patience_increase = 2  # wait this much longer when a new best is
+                           # found
+    improvement_threshold = 0.995  # a relative improvement of this much is
+                                   # considered significant
+    validation_frequency = min(n_train_batches, patience // 2)
+                                  # go through this many
+                                  # minibatche before checking the network
+                                  # on the validation set; in this case we
+                                  # check every epoch
 
-    save_file = open(paraFile, 'rb')
-    layer0.params[0].set_value(cPickle.load(save_file), borrow=True)
-    layer0.params[1].set_value(cPickle.load(save_file), borrow=True)
-    layer1.params[0].set_value(cPickle.load(save_file), borrow=True)
-    layer1.params[1].set_value(cPickle.load(save_file), borrow=True)
-    layer2.params[0].set_value(cPickle.load(save_file), borrow=True)
-    layer2.params[1].set_value(cPickle.load(save_file), borrow=True)
-    layer3.params[0].set_value(cPickle.load(save_file), borrow=True)
-    layer3.params[1].set_value(cPickle.load(save_file), borrow=True)
-    layer4.params[0].set_value(cPickle.load(save_file), borrow=True)
-    layer4.params[1].set_value(cPickle.load(save_file), borrow=True)
-    layer5.params[0].set_value(cPickle.load(save_file), borrow=True)
-    layer5.params[1].set_value(cPickle.load(save_file), borrow=True)
-    layer6.params[0].set_value(cPickle.load(save_file), borrow=True)
-    layer6.params[1].set_value(cPickle.load(save_file), borrow=True)
-    layer_fn.params[0].set_value(cPickle.load(save_file), borrow=True)
-    layer_fn.params[1].set_value(cPickle.load(save_file), borrow=True)
-    save_file.close()
-
-    print 'perform testing'
-
+    best_validation_loss = numpy.inf
+    best_iter = 0
+    test_score = 0.
+    
     start_time = time.clock()
+    epoch = 0
+    while (epoch < n_epochs):
+        epoch = epoch + 1
+        for minibatch_index in range(n_train_batches):
 
-    tmpImg = test_model(0)[0]
+            iter = (epoch - 1) * n_train_batches + minibatch_index
+
+            if iter % 10 == 0:
+                print('training @ iter = ', iter)
+            tmpImg = train_model(minibatch_index)[0]
+
+    end_time = time.clock()
+    print('training end.....')
+    
+    #tmpImg = test_model(0)[0] 
     tmpImg = tmpImg.reshape((Height,Width))
 
     img = x1.reshape((Height,Width,3)) * 255
@@ -165,7 +212,9 @@ def Train_leNet(args, nkerns=[50, 70, 100, 150, 100, 70, 70], batch_size=1):
     imgfn = 'maskout.png'
     img0.save(imgfn)
 
-    end_time = time.clock()
+    
     print
     print >> sys.stderr, ('The code ran for %.2fm' % ((end_time - start_time) / 60.))
     
+if __name__ == '__main__':
+    Train_leNet()
